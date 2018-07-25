@@ -36,7 +36,7 @@ func (l *LogListener) BeforeCall(ctx context.Context, call *models.Call) error {
 	fmt.Println("Interception before function call occurs")
 	fmt.Println("The calling image is ",call.Image)
 
-	/**
+	
 	//launch docker client to fetch the image
 	endpoint := "unix:///var/run/docker.sock"
 	client, err := docker.NewClient(endpoint)
@@ -52,7 +52,7 @@ func (l *LogListener) BeforeCall(ctx context.Context, call *models.Call) error {
 
 	img := imgs[0]
 	fmt.Println("Last image is ", img.RepoTags)
-	*/
+	
 
 	//CLAIR_ADDR=localhost CLAIR_OUTPUT=High CLAIR_THRESHOLD=10  klar postgres:9.5.1 > result.json
 	

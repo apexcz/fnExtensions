@@ -7,6 +7,7 @@ import (
 	"github.com/fnproject/fn/api/models"
 	"github.com/fnproject/fn/api/server"
 	"github.com/fnproject/fn/fnext"
+	"github.com/fsouza/go-dockerclient"
 )
 
 func init() {
@@ -31,11 +32,28 @@ type LogListener struct {
 }
 
 func (l *LogListener) BeforeCall(ctx context.Context, call *models.Call) error {
-	fmt.Println("This is an interception that occurs before a function is called")
+	fmt.Println("Interception before function call occurs")
+	fmt.Println("The calling image is ",call.Image)
+
+	//launch docker client to fetch the image
+	endpoint := "unix:///var/run/docker.sock"
+	client, err := docker.NewClient(endpoint)
+	if err != nil {
+		panic(err)
+	}
+
+	imgs,err := client.ListImages(docker.ListImagesOptions{All:false})
+
+	if err != nil {
+		panic(err)
+	}
+
+	img := imgs[0]
+	fmt.Println("Last image is ", img.RepoTags)
 	return nil
 }
 
 func (l *LogListener) AfterCall(ctx context.Context, call *models.Call) error {
-	fmt.Println("Hahahaha YO! And this is an annoying message that will happen AFTER every time a function is called.")
+	fmt.Println("Triggers after function executes completely")
 	return nil
 }

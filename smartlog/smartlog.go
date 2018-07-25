@@ -57,8 +57,8 @@ func (l *LogListener) BeforeCall(ctx context.Context, call *models.Call) error {
 	//CLAIR_ADDR=localhost CLAIR_OUTPUT=High CLAIR_THRESHOLD=10  klar postgres:9.5.1 > result.json
 	
 	cmd := exec.Command("CLAIR_ADDR=localhost", "CLAIR_OUTPUT=High", "CLAIR_THRESHOLD=10", "JSON_OUTPUT=true", "klar", "postgres:9.5.1", ">", "result.json")
-	err := cmd.Run()
-	if err != nil {
+	
+	if err := cmd.Run(); err != nil {
 		//log.Fatal(err)
 		fmt.Println("Error = ",err)
 	}

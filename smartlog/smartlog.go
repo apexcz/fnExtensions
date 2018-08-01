@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"time"
 
 	"github.com/fnproject/fn/api/models"
 	"github.com/fnproject/fn/api/server"
@@ -51,23 +52,25 @@ func (l *LogListener) BeforeCall(ctx context.Context, call *models.Call) error {
 	}
 
 	img := imgs[0]
-	fmt.Println("Last image is ", img.RepoTags)
-	
+	fmt.Println("Last image is ", img.RepoTags)	
 
 	//CLAIR_ADDR=localhost CLAIR_OUTPUT=High CLAIR_THRESHOLD=10  klar postgres:9.5.1 > result.json
 	
-	cmd := "klar"
-	args := []string{"CLAIR_ADDR=localhost", "CLAIR_OUTPUT=High", "CLAIR_THRESHOLD=10", "JSON_OUTPUT=true","postgres:9.5.1", ">", "$HOME/Documents/result.json"}
+	go launchClair(call.Image)
+	time.Sleep(1*time.Second)
 	
-	if err := exec.Command(cmd,args...).Run(); err != nil {
-		//log.Fatal(err)
-		fmt.Println("Error = ",err)
-	}
-
 	return nil
 }
 
 func (l *LogListener) AfterCall(ctx context.Context, call *models.Call) error {
 	fmt.Println("Triggers after function executes completely")
 	return nil
+}
+
+func launchClair(image string) {
+	cmd := exec.Command("sh","-c","CLAIR_ADDR=localhost CLAIR_OUTPUT=High CLAIR_THRESHOLD=3 JSON_OUTPUT=true klar postgres:9.5.1 > $HOME/Documents/result.json")
+	_, err := cmd.Output()
+	if err != nil {
+		fmt.Println(err.Error())		
+	}
 }

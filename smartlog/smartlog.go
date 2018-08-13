@@ -7,19 +7,38 @@ import (
 	"os/exec"
 	"time"
 	"io/ioutil"
-
+	"html/template"
+	"net/http"
+	"path/filepath"
+	"log"
+	"encoding/json"
+	
 	"github.com/fnproject/fn/api/models"
 	"github.com/fnproject/fn/api/server"
 	"github.com/fnproject/fn/fnext"
 	"github.com/fsouza/go-dockerclient"
-	"github.com/apang1992/jq"
+	//"github.com/apang1992/jq"
+	"github.com/gorilla/mux"
 
-	//_ "github.com/apexcz/fnExtensions/models"
+	apexFn "github.com/apexcz/fnExtensions/models"
 )
 
+var tpl *template.Template
+var assetDir string
 
 func init() {
 	server.RegisterExtension(&myLogExt{})
+
+	// Get the path to the asset directory.	
+	tempAssetDir, err := os.Getwd()
+	if err != nil {
+		fmt.Println(err)
+		//return
+	}
+	assetDir = tempAssetDir
+
+	//tpl = template.Must(template.ParseGlob("/Users/chineduoty/Documents/go/src/github.com/apexcz/fnExtensions/smartlog/templates/*.html"))
+	tpl = template.Must(template.ParseGlob(fmt.Sprintf("%s/smartlog/templates/*.html", assetDir)))
 }
 
 type myLogExt struct {
@@ -38,6 +57,14 @@ func (e *myLogExt) Setup(s fnext.ExtServer) error {
 type LogListener struct {
 
 }
+
+type StaticReportModel struct {
+	AssetDir string
+	GenReport apexFn.GeneratedReport
+	ImageName string
+	TotalVuln int
+}
+
 
 func (l *LogListener) BeforeCall(ctx context.Context, call *models.Call) error {
 	fmt.Println("Interception before function call occurs")
@@ -62,34 +89,11 @@ func (l *LogListener) BeforeCall(ctx context.Context, call *models.Call) error {
 
 	//CLAIR_ADDR=localhost CLAIR_OUTPUT=High CLAIR_THRESHOLD=10  klar postgres:9.5.1 > result.json
 	
-	// Get the path to the asset directory.
-	
-	assetDir, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	
 	fmt.Println("Asset path is ",assetDir)
 
-	go launchClair(call.Image,assetDir)
+	go launchClair(call.Image)
 	time.Sleep(1*time.Second)
 	
-	/**
-	staticDir := filepath.Join(assetDir, "static")
-	templateDir := filepath.Join(assetDir, "templates")
-	// Make sure all the paths exist.
-	tmplPaths := []string{
-		staticDir,
-		filepath.Join(templateDir, "vulns.html"),
-		filepath.Join(templateDir, "repositories.html"),
-		filepath.Join(templateDir, "tags.html"),
-	}
-	for _, path := range tmplPaths {
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			return fmt.Errorf("template %s not found", path)
-		}
-	}
-	*/
 	return nil
 }
 
@@ -98,8 +102,16 @@ func (l *LogListener) AfterCall(ctx context.Context, call *models.Call) error {
 	return nil
 }
 
-func launchClair(image string,asset string) {
-	instruction := fmt.Sprintf("CLAIR_ADDR=localhost CLAIR_OUTPUT=Low CLAIR_THRESHOLD=3 JSON_OUTPUT=true klar postgres:9.5.1 > %s/staticreport.json", asset)
+func (srm *StaticReportModel) StaticHandler(response http.ResponseWriter, request *http.Request) {
+	log.Println("Inside handler = ",srm.AssetDir)
+	err := tpl.ExecuteTemplate(response,"index.html",srm)
+	if err != nil {
+		fmt.Println(err)
+	}
+}
+
+func launchClair(image string) {
+	instruction := fmt.Sprintf("CLAIR_ADDR=localhost CLAIR_OUTPUT=Low CLAIR_THRESHOLD=3 JSON_OUTPUT=true klar postgres:9.5.1 > %s/staticreport.json", assetDir)
 	
 	cmd := exec.Command("sh","-c",instruction)
 	_, err := cmd.Output()
@@ -107,17 +119,56 @@ func launchClair(image string,asset string) {
 		fmt.Println(err.Error())		
 	}
 
-	jsonFile, err := os.Open(fmt.Sprintf("%s/staticreport.json", asset))
+	jsonFile, err := os.Open(fmt.Sprintf("%s/staticreport.json", assetDir))
 	if err != nil {
 		fmt.Println(err)
 	}
 	defer jsonFile.Close()
 	jsonData, _ := ioutil.ReadAll(jsonFile)
 
+	var report apexFn.GeneratedReport
+	json.Unmarshal(jsonData, &report)
+
+	/**
 	layerCount, err := jq.JsonQuery([]byte(jsonData), ".LayerCount")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 	} else {
 		fmt.Println("the layerCount is:", string(layerCount))
 	}
+	*/
+
+
+	staticDir := filepath.Join(assetDir, "smartlog/static")
+	templateDir := filepath.Join(assetDir, "smartlog/templates")
+	// Make sure all the paths exist.
+	tmplPaths := []string{
+		staticDir,
+		filepath.Join(templateDir, "index.html"),
+	}
+
+	fmt.Println("The html paths are => ",tmplPaths)
+
+	for _, path := range tmplPaths {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			fmt.Printf("template %s not found", path)
+			//Errorf
+		}
+	}
+
+	// Create mux server.
+	mux := mux.NewRouter()
+	mux.UseEncodedPath()
+
+	vulnCount := len(report.Vulnerabilities.High) + len(report.Vulnerabilities.Low) + len(report.Vulnerabilities.Medium)  
+	vm := &StaticReportModel{AssetDir: filepath.Join(templateDir, "index.html"), GenReport: report, ImageName: image, TotalVuln:vulnCount}
+	mux.HandleFunc("/static-report", vm.StaticHandler)
+
+	// Serve the static assets.
+	staticHandler := http.FileServer(http.Dir(staticDir))
+	mux.PathPrefix("/static/").Handler(http.StripPrefix("/static/", staticHandler))
+	mux.Handle("/", staticHandler)
+
+	http.Handle("/",mux)
+	http.ListenAndServe(":8580", nil)
 }

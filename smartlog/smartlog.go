@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"log"
 	"encoding/json"
-	
+
 	"github.com/fnproject/fn/api/models"
 	"github.com/fnproject/fn/api/server"
 	"github.com/fnproject/fn/fnext"
@@ -27,9 +27,9 @@ var tpl *template.Template
 var assetDir string
 
 func init() {
-	server.RegisterExtension(&myLogExt{})
+	server.RegisterExtension(&staticExt{})
 
-	// Get the path to the asset directory.	
+	// Get the path to the asset directory.
 	tempAssetDir, err := os.Getwd()
 	if err != nil {
 		fmt.Println(err)
@@ -41,15 +41,15 @@ func init() {
 	tpl = template.Must(template.ParseGlob(fmt.Sprintf("%s/smartlog/templates/*.html", assetDir)))
 }
 
-type myLogExt struct {
+type staticExt struct {
 
 }
 
-func (e *myLogExt) Name() string {
+func (e *staticExt) Name() string {
 	return "github.com/apexcz/fnExtensions/smartlog"
 }
 
-func (e *myLogExt) Setup(s fnext.ExtServer) error {
+func (e *staticExt) Setup(s fnext.ExtServer) error {
 	s.AddCallListener(&LogListener{})
 	return nil
 }
@@ -70,7 +70,7 @@ func (l *LogListener) BeforeCall(ctx context.Context, call *models.Call) error {
 	fmt.Println("Interception before function call occurs")
 	fmt.Println("The calling image is ",call.Image)
 
-	
+
 	//launch docker client to fetch the image
 	endpoint := "unix:///var/run/docker.sock"
 	client, err := docker.NewClient(endpoint)
@@ -85,15 +85,15 @@ func (l *LogListener) BeforeCall(ctx context.Context, call *models.Call) error {
 	}
 
 	img := imgs[0]
-	fmt.Println("Last image is ", img.RepoTags)	
+	fmt.Println("Last image is ", img.RepoTags)
 
 	//CLAIR_ADDR=localhost CLAIR_OUTPUT=High CLAIR_THRESHOLD=10  klar postgres:9.5.1 > result.json
-	
+
 	fmt.Println("Asset path is ",assetDir)
 
 	go launchClair(call.Image)
 	time.Sleep(1*time.Second)
-	
+
 	return nil
 }
 
@@ -111,15 +111,15 @@ func (srm *StaticReportModel) StaticHandler(response http.ResponseWriter, reques
 }
 
 func launchClair(image string) {
-	instruction := fmt.Sprintf("CLAIR_ADDR=localhost CLAIR_OUTPUT=Low CLAIR_THRESHOLD=3 JSON_OUTPUT=true klar postgres:9.5.1 > %s/staticreport.json", assetDir)
-	
+	instruction := fmt.Sprintf("CLAIR_ADDR=localhost CLAIR_OUTPUT=Low CLAIR_THRESHOLD=3 JSON_OUTPUT=true klar postgres:9.5.1 > %s/smaticreport.json", assetDir)
+
 	cmd := exec.Command("sh","-c",instruction)
 	_, err := cmd.Output()
 	if err != nil {
-		fmt.Println(err.Error())		
+		fmt.Println(err.Error())
 	}
 
-	jsonFile, err := os.Open(fmt.Sprintf("%s/staticreport.json", assetDir))
+	jsonFile, err := os.Open(fmt.Sprintf("%s/smaticreport.json", assetDir))
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -160,7 +160,7 @@ func launchClair(image string) {
 	mux := mux.NewRouter()
 	mux.UseEncodedPath()
 
-	vulnCount := len(report.Vulnerabilities.High) + len(report.Vulnerabilities.Low) + len(report.Vulnerabilities.Medium)  
+	vulnCount := len(report.Vulnerabilities.High) + len(report.Vulnerabilities.Low) + len(report.Vulnerabilities.Medium)
 	vm := &StaticReportModel{AssetDir: filepath.Join(templateDir, "index.html"), GenReport: report, ImageName: image, TotalVuln:vulnCount}
 	mux.HandleFunc("/static-report", vm.StaticHandler)
 

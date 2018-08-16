@@ -25,6 +25,9 @@ import (
 
 var tpl *template.Template
 var assetDir string
+var vulnThreshold int
+var vulnLevel string
+var enforceStatic bool
 
 func init() {
 	server.RegisterExtension(&staticExt{})
@@ -39,6 +42,10 @@ func init() {
 
 	//tpl = template.Must(template.ParseGlob("/Users/chineduoty/Documents/go/src/github.com/apexcz/fnExtensions/smartlog/templates/*.html"))
 	tpl = template.Must(template.ParseGlob(fmt.Sprintf("%s/smartlog/templates/*.html", assetDir)))
+
+	vulnThreshold = 1
+	vulnLevel = "Low"
+	enforceStatic = false
 }
 
 type staticExt struct {
@@ -87,12 +94,32 @@ func (l *LogListener) BeforeCall(ctx context.Context, call *models.Call) error {
 	img := imgs[0]
 	fmt.Println("Last image is ", img.RepoTags)
 
+	imgId,err := client.InspectImage(call.Image)
+	if err != nil {
+		panic(err)
+	}
+
+	imageId := imgId.ID[7:19]
+	fmt.Println("Image id is ", imageId)
 	//CLAIR_ADDR=localhost CLAIR_OUTPUT=High CLAIR_THRESHOLD=10  klar postgres:9.5.1 > result.json
 
 	fmt.Println("Asset path is ",assetDir)
 
-	go launchClair(call.Image)
-	time.Sleep(1*time.Second)
+	if !enforceStatic {
+		go launchClair(call.Image,imageId)
+		time.Sleep(1*time.Second)
+	}else{
+		risksCount := launchClair(call.Image,imageId)
+
+		if risksCount > vulnThreshold {
+			err := client.RemoveImage(call.Image)
+			if err != nil {
+				panic(err)
+			}
+		}
+
+	}
+
 
 	return nil
 }
@@ -110,8 +137,8 @@ func (srm *StaticReportModel) StaticHandler(response http.ResponseWriter, reques
 	}
 }
 
-func launchClair(image string) {
-	instruction := fmt.Sprintf("CLAIR_ADDR=localhost CLAIR_OUTPUT=Low CLAIR_THRESHOLD=3 JSON_OUTPUT=true klar postgres:9.5.1 > %s/smaticreport.json", assetDir)
+func launchClair(image string,imageid string) (vulnCount int) {
+	instruction := fmt.Sprintf("CLAIR_ADDR=localhost CLAIR_OUTPUT=%s CLAIR_THRESHOLD=%d JSON_OUTPUT=true klar %s > %s/%s.json",vulnLevel,vulnThreshold, image,assetDir,imageid)
 
 	cmd := exec.Command("sh","-c",instruction)
 	_, err := cmd.Output()
@@ -119,7 +146,8 @@ func launchClair(image string) {
 		fmt.Println(err.Error())
 	}
 
-	jsonFile, err := os.Open(fmt.Sprintf("%s/smaticreport.json", assetDir))
+	fmt.Println("Image id inside is ", imageid)
+	jsonFile, err := os.Open(fmt.Sprintf("%s/%s.json", assetDir,imageid))
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -160,9 +188,9 @@ func launchClair(image string) {
 	mux := mux.NewRouter()
 	mux.UseEncodedPath()
 
-	vulnCount := len(report.Vulnerabilities.High) + len(report.Vulnerabilities.Low) + len(report.Vulnerabilities.Medium)
+	vulnCount = len(report.Vulnerabilities.High) + len(report.Vulnerabilities.Low) + len(report.Vulnerabilities.Medium)
 	vm := &StaticReportModel{AssetDir: filepath.Join(templateDir, "index.html"), GenReport: report, ImageName: image, TotalVuln:vulnCount}
-	mux.HandleFunc("/static-report", vm.StaticHandler)
+	mux.HandleFunc(fmt.Sprintf("/static-report/%s",imageid), vm.StaticHandler)
 
 	// Serve the static assets.
 	staticHandler := http.FileServer(http.Dir(staticDir))
@@ -171,4 +199,5 @@ func launchClair(image string) {
 
 	http.Handle("/",mux)
 	http.ListenAndServe(":8580", nil)
+	return
 }

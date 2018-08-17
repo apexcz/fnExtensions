@@ -29,6 +29,9 @@ var vulnThreshold int
 var vulnLevel string
 var enforceStatic bool
 
+//var containerStartedAt time.Time
+var client *docker.Client
+
 func init() {
 	server.RegisterExtension(&staticExt{})
 
@@ -80,19 +83,11 @@ func (l *LogListener) BeforeCall(ctx context.Context, call *models.Call) error {
 
 	//launch docker client to fetch the image
 	endpoint := "unix:///var/run/docker.sock"
-	client, err := docker.NewClient(endpoint)
+	newClient, err := docker.NewClient(endpoint)
 	if err != nil {
 		panic(err)
 	}
-
-	imgs,err := client.ListImages(docker.ListImagesOptions{All:false})
-
-	if err != nil {
-		panic(err)
-	}
-
-	img := imgs[0]
-	fmt.Println("Last image is ", img.RepoTags)
+	client = newClient
 
 	imgId,err := client.InspectImage(call.Image)
 	if err != nil {
@@ -126,6 +121,17 @@ func (l *LogListener) BeforeCall(ctx context.Context, call *models.Call) error {
 
 func (l *LogListener) AfterCall(ctx context.Context, call *models.Call) error {
 	fmt.Println("Triggers after function executes completely")
+	fmt.Printf("Call Model is %v \n",call)
+
+	/**
+	container,err := client.InspectContainer(call.ID)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println("\n ========================== \n")
+	fmt.Printf("Container details is %v \n",container)
+	*/
 	return nil
 }
 
@@ -140,13 +146,19 @@ func (srm *StaticReportModel) StaticHandler(response http.ResponseWriter, reques
 func launchClair(image string,imageid string) (vulnCount int) {
 	instruction := fmt.Sprintf("CLAIR_ADDR=localhost CLAIR_OUTPUT=%s CLAIR_THRESHOLD=%d JSON_OUTPUT=true klar %s > %s/%s.json",vulnLevel,vulnThreshold, image,assetDir,imageid)
 
+	startScan := time.Now()
+
 	cmd := exec.Command("sh","-c",instruction)
 	_, err := cmd.Output()
 	if err != nil {
 		fmt.Println(err.Error())
 	}
 
-	fmt.Println("Image id inside is ", imageid)
+	scanDuration := time.Now().Sub(startScan)
+
+	fmt.Println("Duration of static scan is ",scanDuration)
+
+
 	jsonFile, err := os.Open(fmt.Sprintf("%s/%s.json", assetDir,imageid))
 	if err != nil {
 		fmt.Println(err)

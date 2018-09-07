@@ -10,14 +10,12 @@ import (
 	"html/template"
 	"net/http"
 	"path/filepath"
-	"log"
 	"encoding/json"
 
 	"github.com/fnproject/fn/api/models"
 	"github.com/fnproject/fn/api/server"
 	"github.com/fnproject/fn/fnext"
 	"github.com/fsouza/go-dockerclient"
-	//"github.com/apang1992/jq"
 	"github.com/gorilla/mux"
 
 	apexFn "github.com/apexcz/fnExtensions/models"
@@ -27,12 +25,13 @@ var tpl *template.Template
 var assetDir string
 var vulnThreshold int
 var vulnLevel string
-var enforceStatic bool
+var staticMode int
 
-//var containerStartedAt time.Time
+var containerStartedAt time.Time
 var client *docker.Client
 
 func init() {
+	// Registers the extension
 	server.RegisterExtension(&staticExt{})
 
 	// Get the path to the asset directory.
@@ -48,7 +47,7 @@ func init() {
 
 	vulnThreshold = 1
 	vulnLevel = "Low"
-	enforceStatic = false
+	staticMode = 0 // 0 - learning , 1 - enforce
 }
 
 type staticExt struct {
@@ -77,9 +76,10 @@ type StaticReportModel struct {
 
 
 func (l *LogListener) BeforeCall(ctx context.Context, call *models.Call) error {
-	fmt.Println("Interception before function call occurs")
-	fmt.Println("The calling image is ",call.Image)
+	fmt.Println("Interception before function call occurs. \n The calling image is ",call.Image)
 
+	//time function call started
+	containerStartedAt = time.Now()
 
 	//launch docker client to fetch the image
 	endpoint := "unix:///var/run/docker.sock"
@@ -98,29 +98,26 @@ func (l *LogListener) BeforeCall(ctx context.Context, call *models.Call) error {
 	fmt.Println("Image id is ", imageId)
 	//CLAIR_ADDR=localhost CLAIR_OUTPUT=High CLAIR_THRESHOLD=10  klar postgres:9.5.1 > result.json
 
-	fmt.Println("Asset path is ",assetDir)
-
-	if !enforceStatic {
+	if staticMode == 0 {
 		go launchClair(call.Image,imageId)
 		time.Sleep(1*time.Second)
 	}else{
 		risksCount := launchClair(call.Image,imageId)
-
 		if risksCount > vulnThreshold {
 			err := client.RemoveImage(call.Image)
 			if err != nil {
 				panic(err)
 			}
 		}
-
 	}
-
 
 	return nil
 }
 
 func (l *LogListener) AfterCall(ctx context.Context, call *models.Call) error {
-	fmt.Println("Triggers after function executes completely")
+
+	callDuration := time.Now().Sub(containerStartedAt)
+	fmt.Println("Function call executed for ",callDuration)
 	fmt.Printf("Call Model is %v \n",call)
 
 	/**
@@ -136,7 +133,6 @@ func (l *LogListener) AfterCall(ctx context.Context, call *models.Call) error {
 }
 
 func (srm *StaticReportModel) StaticHandler(response http.ResponseWriter, request *http.Request) {
-	log.Println("Inside handler = ",srm.AssetDir)
 	err := tpl.ExecuteTemplate(response,"index.html",srm)
 	if err != nil {
 		fmt.Println(err)
@@ -158,7 +154,6 @@ func launchClair(image string,imageid string) (vulnCount int) {
 
 	fmt.Println("Duration of static scan is ",scanDuration)
 
-
 	jsonFile, err := os.Open(fmt.Sprintf("%s/%s.json", assetDir,imageid))
 	if err != nil {
 		fmt.Println(err)
@@ -169,16 +164,6 @@ func launchClair(image string,imageid string) (vulnCount int) {
 	var report apexFn.GeneratedReport
 	json.Unmarshal(jsonData, &report)
 
-	/**
-	layerCount, err := jq.JsonQuery([]byte(jsonData), ".LayerCount")
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-	} else {
-		fmt.Println("the layerCount is:", string(layerCount))
-	}
-	*/
-
-
 	staticDir := filepath.Join(assetDir, "smartlog/static")
 	templateDir := filepath.Join(assetDir, "smartlog/templates")
 	// Make sure all the paths exist.
@@ -187,12 +172,9 @@ func launchClair(image string,imageid string) (vulnCount int) {
 		filepath.Join(templateDir, "index.html"),
 	}
 
-	fmt.Println("The html paths are => ",tmplPaths)
-
 	for _, path := range tmplPaths {
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			fmt.Printf("template %s not found", path)
-			//Errorf
 		}
 	}
 
@@ -208,7 +190,6 @@ func launchClair(image string,imageid string) (vulnCount int) {
 	staticHandler := http.FileServer(http.Dir(staticDir))
 	mux.PathPrefix("/static/").Handler(http.StripPrefix("/static/", staticHandler))
 	mux.Handle("/", staticHandler)
-
 	http.Handle("/",mux)
 	http.ListenAndServe(":8580", nil)
 	return
